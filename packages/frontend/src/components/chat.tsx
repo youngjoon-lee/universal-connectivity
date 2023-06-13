@@ -123,9 +123,10 @@ export default function ChatContainer() {
     (e: React.ChangeEvent<HTMLInputElement>) => {
       if (e.target.files) {
         const reader = new FileReader();
-        reader.readAsText(e.target.files[0]);
+        reader.readAsArrayBuffer(e.target.files[0]);
         reader.onload = (readerEvent) => {
-          console.log(`READER_RESULT: ${readerEvent.target?.result}`);
+          const result = readerEvent.target?.result as ArrayBuffer;
+          console.log(`READER_RESULT: ${result.byteLength} bytes`);
         };
       }
     },
