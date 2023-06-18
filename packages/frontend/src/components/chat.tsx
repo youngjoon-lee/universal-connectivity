@@ -85,6 +85,16 @@ export default function ChatContainer() {
             for await (const data of source) {
               const resp = uint8ArrayToString(data.subarray())
               console.log(`RESPONSE RECEIVED: ${resp.length}`)
+
+              const objectUrl = window.URL.createObjectURL(new Blob([resp]))
+              const msg: ChatMessage = {
+                msg: [
+                  `File ${resp.length} bytes\n`,
+                  <a href={objectUrl} > <b>Download</b></a >],
+                from: "other",
+                peerId: multiaddr(provider).getPeerId()!,
+              }
+              setMessageHistory([...messageHistory, msg])
             }
           }
         )
@@ -104,7 +114,7 @@ export default function ChatContainer() {
           const fileId = uint8ArrayToString(msg.subarray())
           console.log(`REQUEST RECEIVED: fileId:${fileId}, source:${stream.source}`)
           const file = files.get(fileId)!
-          return new Uint8Array(file.body)
+          return file.body
         }),
         (source) => lp.encode(source),
         stream.sink,
@@ -150,7 +160,7 @@ export default function ChatContainer() {
     const myPeerId = libp2p.peerId.toString()
     const file: ChatFile = {
       id: uuidv4(),
-      body: result,
+      body: new Uint8Array(result),
       provider: myPeerId,
     }
     setFiles(files.set(file.id, file))

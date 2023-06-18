@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState } from 'react';
 
 export interface ChatFile {
 	id: string
-	body: ArrayBuffer
+	body: Uint8Array
 	provider: string
 }
 
