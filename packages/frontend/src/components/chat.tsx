@@ -12,6 +12,7 @@ import { fromString as uint8ArrayFromString } from 'uint8arrays/from-string'
 import { multiaddr, Multiaddr } from '@multiformats/multiaddr'
 import { toString as uint8ArrayToString } from 'uint8arrays/to-string'
 import * as lp from 'it-length-prefixed'
+import { peerIdFromString } from '@libp2p/peer-id'
 
 interface MessageProps extends ChatMessage { }
 
@@ -75,7 +76,7 @@ export default function ChatContainer() {
         const { fileId, provider } = JSON.parse(new TextDecoder().decode(data))
         console.log(`fileId:${fileId}, provider:${provider}`)
 
-        const stream = await libp2p.dialProtocol(multiaddr(provider), FILE_EXCHANGE_PROTOCOL)
+        const stream = await libp2p.dialProtocol(peerIdFromString(provider), FILE_EXCHANGE_PROTOCOL)
         await pipe(
           [uint8ArrayFromString(fileId)],
           (source) => lp.encode(source),
@@ -92,7 +93,7 @@ export default function ChatContainer() {
                   `File ${resp.length} bytes\n`,
                   <a href={objectUrl} > <b>Download</b></a >],
                 from: "other",
-                peerId: multiaddr(provider).getPeerId()!,
+                peerId: provider,
               }
               setMessageHistory([...messageHistory, msg])
             }
@@ -165,14 +166,6 @@ export default function ChatContainer() {
     }
     setFiles(files.set(file.id, file))
 
-    var multiaddr: Multiaddr = libp2p.getMultiaddrs()[0]
-    for (var addr of libp2p.getMultiaddrs()) {
-      console.log(`MULTIADDR: ${addr.toString()}`)
-      if (addr.toString().includes("/p2p-circuit/webrtc/p2p/")) {
-        multiaddr = addr
-      }
-    }
-
     console.log(
       'peers in gossip:',
       libp2p.services.pubsub.getSubscribers(CHAT_FILE_TOPIC).toString(),
@@ -180,7 +173,7 @@ export default function ChatContainer() {
 
     const res = await libp2p.services.pubsub.publish(
       CHAT_FILE_TOPIC,
-      new TextEncoder().encode(JSON.stringify({ fileId: file.id, provider: multiaddr.toString() }))
+      new TextEncoder().encode(JSON.stringify({ fileId: file.id, provider: myPeerId }))
     )
     console.log(
       'sent file to: ',
