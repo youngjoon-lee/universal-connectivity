@@ -1,10 +1,9 @@
 package main
 
 import (
-	"bufio"
 	"context"
-	"encoding/binary"
 	"fmt"
+	"io"
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -160,10 +159,6 @@ func (cr *ChatRoom) requestFile(toPeer peer.ID, fileID []byte) ([]byte, error) {
 	}
 	defer stream.Close()
 
-	reqLen := binary.AppendUvarint([]byte{}, uint64(len(fileID)))
-	if _, err := stream.Write(reqLen); err != nil {
-		return nil, fmt.Errorf("failed to write fileID to the stream: %w", err)
-	}
 	if _, err := stream.Write(fileID); err != nil {
 		return nil, fmt.Errorf("failed to write fileID to the stream: %w", err)
 	}
@@ -171,13 +166,8 @@ func (cr *ChatRoom) requestFile(toPeer peer.ID, fileID []byte) ([]byte, error) {
 		return nil, fmt.Errorf("failed to close write stream: %w", err)
 	}
 
-	reader := bufio.NewReader(stream)
-	respLen, err := binary.ReadUvarint(reader)
+	fileBody, err := io.ReadAll(stream)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response length prefix: %w", err)
-	}
-	fileBody := make([]byte, respLen)
-	if _, err := reader.Read(fileBody); err != nil {
 		return nil, fmt.Errorf("failed to read fileBody from the stream: %w", err)
 	}
 	if err := stream.CloseRead(); err != nil {

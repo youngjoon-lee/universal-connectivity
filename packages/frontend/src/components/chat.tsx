@@ -10,7 +10,6 @@ import { pipe } from 'it-pipe'
 import map from 'it-map'
 import { fromString as uint8ArrayFromString } from 'uint8arrays/from-string'
 import { toString as uint8ArrayToString } from 'uint8arrays/to-string'
-import * as lp from 'it-length-prefixed'
 
 interface MessageProps extends ChatMessage { }
 
@@ -101,9 +100,7 @@ export default function ChatContainer() {
       const stream = await libp2p.dialProtocol(senderPeerId, FILE_EXCHANGE_PROTOCOL)
       await pipe(
         [uint8ArrayFromString(fileId)],
-        (source) => lp.encode(source),
         stream,
-        (source) => lp.decode(source),
         async function(source) {
           for await (const data of source) {
             const body: Uint8Array = data.subarray()
@@ -126,13 +123,11 @@ export default function ChatContainer() {
     libp2p.handle(FILE_EXCHANGE_PROTOCOL, ({ stream }) => {
       pipe(
         stream.source,
-        (source) => lp.decode(source),
         (source) => map(source, async (msg) => {
           const fileId = uint8ArrayToString(msg.subarray())
           const file = files.get(fileId)!
           return file.body
         }),
-        (source) => lp.encode(source),
         stream.sink,
       )
     })

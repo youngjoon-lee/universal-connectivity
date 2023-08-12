@@ -1,9 +1,9 @@
+use std::io;
+
 use async_trait::async_trait;
-use futures::{io, AsyncRead, AsyncWrite};
-use libp2p::{
-    core::upgrade::{read_length_prefixed, write_length_prefixed},
-    request_response::{self, ProtocolName},
-};
+use futures::prelude::*;
+use futures::{AsyncRead, AsyncWrite};
+use libp2p::request_response::{self, ProtocolName};
 
 // Simple file exchange protocol
 
@@ -19,6 +19,9 @@ pub struct FileRequest {
 pub struct FileResponse {
     pub file_body: Vec<u8>,
 }
+
+const FILE_ID_MAX_SIZE: u64 = 1024;
+const FILE_BODY_MAX_SIZE: u64 = 500 * 1024 * 1024;
 
 impl ProtocolName for FileExchangeProtocol {
     fn protocol_name(&self) -> &[u8] {
@@ -40,15 +43,15 @@ impl request_response::Codec for FileExchangeCodec {
     where
         T: AsyncRead + Unpin + Send,
     {
-        let vec = read_length_prefixed(io, 1_000_000).await?;
-
-        if vec.is_empty() {
+        let mut file_id = String::new();
+        io.take(FILE_ID_MAX_SIZE)
+            .read_to_string(&mut file_id)
+            .await?;
+        if file_id.is_empty() {
             return Err(io::ErrorKind::UnexpectedEof.into());
         }
 
-        Ok(FileRequest {
-            file_id: String::from_utf8(vec).unwrap(),
-        })
+        Ok(FileRequest { file_id })
     }
 
     async fn read_response<T>(
@@ -59,13 +62,13 @@ impl request_response::Codec for FileExchangeCodec {
     where
         T: AsyncRead + Unpin + Send,
     {
-        let vec = read_length_prefixed(io, 500_000_000).await?; // update transfer maximum
+        let mut file_body = Vec::new();
+        io.take(FILE_BODY_MAX_SIZE)
+            .read_to_end(&mut file_body)
+            .await
+            .unwrap();
 
-        if vec.is_empty() {
-            return Err(io::ErrorKind::UnexpectedEof.into());
-        }
-
-        Ok(FileResponse { file_body: vec })
+        Ok(FileResponse { file_body })
     }
 
     async fn write_request<T>(
@@ -77,7 +80,7 @@ impl request_response::Codec for FileExchangeCodec {
     where
         T: AsyncWrite + Unpin + Send,
     {
-        write_length_prefixed(io, file_id).await?;
+        io.write_all(file_id.as_bytes()).await?;
 
         Ok(())
     }
@@ -91,7 +94,7 @@ impl request_response::Codec for FileExchangeCodec {
     where
         T: AsyncWrite + Unpin + Send,
     {
-        write_length_prefixed(io, file_body).await?;
+        io.write_all(file_body.as_slice()).await?;
 
         Ok(())
     }
