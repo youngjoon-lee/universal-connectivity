@@ -1,7 +1,11 @@
+mod protocol;
+
 use anyhow::{Context, Result};
 use clap::Parser;
 use futures::future::{select, Either};
 use futures::StreamExt;
+
+use libp2p::request_response::{self, ProtocolSupport};
 use libp2p::{
     core::muxing::StreamMuxerBox,
     gossipsub, identify, identity,
@@ -16,6 +20,8 @@ use libp2p_quic as quic;
 use libp2p_webrtc as webrtc;
 use libp2p_webrtc::tokio::Certificate;
 use log::{debug, error, info, warn};
+use protocol::FileExchangeCodec;
+use std::iter;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
 use std::{
@@ -25,6 +31,8 @@ use std::{
 };
 use tokio::fs;
 
+use crate::protocol::{FileExchangeProtocol, FileRequest};
+
 const TICK_INTERVAL: Duration = Duration::from_secs(15);
 const KADEMLIA_PROTOCOL_NAME: StreamProtocol =
     StreamProtocol::new("/universal-connectivity/lan/kad/1.0.0");
@@ -32,6 +40,8 @@ const PORT_WEBRTC: u16 = 9090;
 const PORT_QUIC: u16 = 9091;
 const LOCAL_KEY_PATH: &str = "./local_key";
 const LOCAL_CERT_PATH: &str = "./cert.pem";
+const GOSSIPSUB_CHAT_TOPIC: &str = "universal-connectivity";
+const GOSSIPSUB_CHAT_FILE_TOPIC: &str = "universal-connectivity-file";
 
 #[derive(Debug, Parser)]
 #[clap(name = "universal connectivity rust peer")]
@@ -99,6 +109,9 @@ async fn main() -> Result<()> {
             .expect("a valid remote address to be provided");
     }
 
+    let chat_topic_hash = gossipsub::IdentTopic::new(GOSSIPSUB_CHAT_TOPIC).hash();
+    let file_topic_hash = gossipsub::IdentTopic::new(GOSSIPSUB_CHAT_FILE_TOPIC).hash();
+
     let mut tick = futures_timer::Delay::new(TICK_INTERVAL);
 
     let now = Instant::now();
@@ -130,11 +143,33 @@ async fn main() -> Result<()> {
                         message,
                     },
                 )) => {
-                    info!(
-                        "Received message from {:?}: {}",
-                        message.source,
-                        String::from_utf8(message.data).unwrap()
-                    );
+                    if message.topic == chat_topic_hash {
+                        info!(
+                            "Received message from {:?}: {}",
+                            message.source,
+                            String::from_utf8(message.data).unwrap()
+                        );
+                        continue;
+                    }
+
+                    if message.topic == file_topic_hash {
+                        let file_id = String::from_utf8(message.data).unwrap();
+                        info!("Received file {} from {:?}", file_id, message.source);
+
+                        let request_id = swarm.behaviour_mut().request_response.send_request(
+                            &message.source.unwrap(),
+                            FileRequest {
+                                file_id: file_id.clone(),
+                            },
+                        );
+                        info!(
+                            "Requested file {} to {:?}: req_id:{:?}",
+                            file_id, message.source, request_id
+                        );
+                        continue;
+                    }
+
+                    error!("Unexpected gossipsub topic hash: {:?}", message.topic);
                 }
                 SwarmEvent::Behaviour(BehaviourEvent::Gossipsub(
                     libp2p::gossipsub::Event::Subscribed { peer_id, topic },
@@ -194,6 +229,34 @@ async fn main() -> Result<()> {
                 SwarmEvent::Behaviour(BehaviourEvent::Kademlia(e)) => {
                     debug!("Kademlia event: {:?}", e);
                 }
+                SwarmEvent::Behaviour(BehaviourEvent::RequestResponse(
+                    request_response::Event::Message { message, .. },
+                )) => match message {
+                    request_response::Message::Request { request, .. } => {
+                        //TODO: support ProtocolSupport::Full
+                        debug!(
+                            "umimplemented: request_response::Message::Request: {:?}",
+                            request
+                        );
+                    }
+                    request_response::Message::Response { response, .. } => {
+                        info!(
+                            "request_response::Message::Response: size:{}",
+                            response.file_body.len()
+                        );
+                        // TODO: store this file (in memory or disk) and provider it via Kademlia
+                    }
+                },
+                SwarmEvent::Behaviour(BehaviourEvent::RequestResponse(
+                    request_response::Event::OutboundFailure {
+                        request_id, error, ..
+                    },
+                )) => {
+                    error!(
+                        "request_response::Event::OutboundFailure for request {:?}: {:?}",
+                        request_id, error
+                    );
+                }
                 event => {
                     debug!("Other type of event: {:?}", event);
                 }
@@ -216,7 +279,7 @@ async fn main() -> Result<()> {
                 );
 
                 if let Err(err) = swarm.behaviour_mut().gossipsub.publish(
-                    gossipsub::IdentTopic::new("universal-connectivity"),
+                    gossipsub::IdentTopic::new(GOSSIPSUB_CHAT_TOPIC),
                     message.as_bytes(),
                 ) {
                     error!("Failed to publish periodic message: {err}")
@@ -233,6 +296,7 @@ struct Behaviour {
     kademlia: Kademlia<MemoryStore>,
     keep_alive: keep_alive::Behaviour,
     relay: relay::Behaviour,
+    request_response: request_response::Behaviour<FileExchangeCodec>,
 }
 
 fn create_swarm(
@@ -266,11 +330,9 @@ fn create_swarm(
     )
     .expect("Correct configuration");
 
-    // Create a Gossipsub topic
-    let topic = gossipsub::IdentTopic::new("universal-connectivity");
-
-    // subscribes to our topic
-    gossipsub.subscribe(&topic)?;
+    // Create/subscribe Gossipsub topics
+    gossipsub.subscribe(&gossipsub::IdentTopic::new(GOSSIPSUB_CHAT_TOPIC))?;
+    gossipsub.subscribe(&gossipsub::IdentTopic::new(GOSSIPSUB_CHAT_FILE_TOPIC))?;
 
     let transport = {
         let webrtc = webrtc::tokio::Transport::new(local_key.clone(), certificate);
@@ -317,6 +379,12 @@ fn create_swarm(
                 max_circuits_per_peer: 100,
                 ..Default::default()
             },
+        ),
+        request_response: request_response::Behaviour::new(
+            FileExchangeCodec(),
+            // TODO: support ProtocolSupport::Full
+            iter::once((FileExchangeProtocol(), ProtocolSupport::Outbound)),
+            Default::default(),
         ),
     };
     Ok(SwarmBuilder::with_tokio_executor(transport, behaviour, local_peer_id).build())
